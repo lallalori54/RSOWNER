@@ -10,7 +10,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8892866207:AAFWJv_F7SjP1rWkM_oTCfKf9YOL3YAC1XI"
-ADMIN_GROUP_ID = -1008615389785
+
+# FIXED: Topic link https://t.me/c/4356447626/3 se group ID -1004356447626
+ADMIN_GROUP_ID = -1004356447626
 
 TOPIC_MAP_FILE = "/tmp/topic_map.json"
 app = Flask(__name__)
@@ -49,7 +51,7 @@ async def get_user_topic(context, user):
     if uid in mapping:
         return int(mapping[uid])
     
-    name = f"👤 {user.first_name[:15]} | ID:{user.id}"
+    name = f"👤 {user.first_name[:20]} | ID:{user.id}"
     try:
         topic = await context.bot.create_forum_topic(
             chat_id=ADMIN_GROUP_ID,
@@ -78,7 +80,7 @@ async def get_user_topic(context, user):
         return thread_id
         
     except Exception as e:
-        print(f"Topic error: {e}")
+        print(f"Topic creation error: {e}")
         return None
 
 # ==================== HANDLERS ====================
@@ -95,54 +97,65 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
     
+    # Ignore messages from admin group itself
     if msg.chat_id == ADMIN_GROUP_ID:
         return
     
     topic_id = await get_user_topic(context, user)
     time_str = datetime.now().strftime("%H:%M")
     
-    if msg.text:
-        text = (
-            f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>\n"
-            f"{'━'*25}\n"
-            f"{escape(msg.text)}"
-        )
-        if topic_id:
-            await context.bot.send_message(
-                chat_id=ADMIN_GROUP_ID,
-                message_thread_id=topic_id,
-                text=text,
-                parse_mode="HTML"
+    try:
+        if msg.text:
+            text = (
+                f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>\n"
+                f"{'━'*25}\n"
+                f"{escape(msg.text)}"
             )
+            if topic_id:
+                await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_thread_id=topic_id,
+                    text=text,
+                    parse_mode="HTML"
+                )
+            else:
+                await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
         else:
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
-    else:
-        header_text = f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>"
+            # Media, sticker, etc.
+            header_text = f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>"
+            
+            if topic_id:
+                header = await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_thread_id=topic_id,
+                    text=header_text,
+                    parse_mode="HTML"
+                )
+                await msg.copy(
+                    chat_id=ADMIN_GROUP_ID,
+                    message_thread_id=topic_id,
+                    reply_to_message_id=header.message_id
+                )
+            else:
+                header = await context.bot.send_message(
+                    chat_id=ADMIN_GROUP_ID,
+                    text=header_text,
+                    parse_mode="HTML"
+                )
+                await msg.copy(
+                    chat_id=ADMIN_GROUP_ID,
+                    reply_to_message_id=header.message_id
+                )
         
-        if topic_id:
-            header = await context.bot.send_message(
-                chat_id=ADMIN_GROUP_ID,
-                message_thread_id=topic_id,
-                text=header_text,
-                parse_mode="HTML"
-            )
-            await msg.copy(
-                chat_id=ADMIN_GROUP_ID,
-                message_thread_id=topic_id,
-                reply_to_message_id=header.message_id
-            )
-        else:
-            header = await context.bot.send_message(
-                chat_id=ADMIN_GROUP_ID,
-                text=header_text,
-                parse_mode="HTML"
-            )
-            await msg.copy(
-                chat_id=ADMIN_GROUP_ID,
-                reply_to_message_id=header.message_id
-            )
-    
-    await msg.reply_text("✅ <b>Message delivered!</b> Please wait for response.", parse_mode="HTML")
+        await msg.reply_text("✅ <b>Message delivered!</b> Please wait for response.", parse_mode="HTML")
+        
+    except Exception as e:
+        print(f"Forward error: {e}")
+        await msg.reply_text(
+            f"❌ <b>Failed to send message.</b>\nError: <code>{escape(str(e))}</code>\n\n"
+            f"Please contact admin directly.",
+            parse_mode="HTML"
+        )
 
 async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -166,7 +179,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await msg.copy(chat_id=user_id)
-        await msg.reply_text(f"✅ <b>Sent to user</b> <code>{user.id}</code>", parse_mode="HTML")
+        await msg.reply_text(f"✅ <b>Sent to user</b> <code>{user_id}</code>", parse_mode="HTML")
     except Exception as e:
         await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
 
