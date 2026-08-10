@@ -8,13 +8,11 @@ from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ==================== CONFIG ====================
 BOT_TOKEN = "8892866207:AAFWJv_F7SjP1rWkM_oTCfKf9YOL3YAC1XI"
 ADMIN_GROUP_ID = -1004356447626
 TOPIC_MAP_FILE = "/tmp/topic_map.json"
 app = Flask(__name__)
 
-# ==================== STORAGE ====================
 def load_data():
     try:
         with open(TOPIC_MAP_FILE, 'r') as f:
@@ -32,17 +30,14 @@ def save_data(data):
 def extract_user_id(text):
     if not text:
         return None
-    # Match: 🆔 12345 or 🆔 ID: 12345 or 🆔 <code>12345</code>
     m = re.search(r'🆔\s*(?:ID\s*:)?\s*(?:<code>)?(\d+)', text)
     if m:
         return int(m.group(1))
-    # Fallback
     m = re.search(r'\(ID:\s*(\d+)\)', text)
     if m:
         return int(m.group(1))
     return None
 
-# ==================== TOPIC MANAGEMENT ====================
 async def get_user_topic(context, user):
     data = load_data()
     uid = str(user.id)
@@ -50,9 +45,8 @@ async def get_user_topic(context, user):
     if uid in data["user_to_topic"]:
         return int(data["user_to_topic"][uid])
     
-    # Create topic name with username
     display = f"@{user.username}" if user.username else user.first_name
-    name = f"👤 {display[:25]} | ID:{user.id}"
+    name = f"👤 {display[:30]}"
     
     try:
         topic = await context.bot.create_forum_topic(
@@ -61,7 +55,6 @@ async def get_user_topic(context, user):
         )
         thread_id = topic.message_thread_id
         
-        # Send user info header
         header = (
             f"┌─ <b>👤 USER INFO</b>\n"
             f"├ <b>Name:</b> {escape(user.first_name)}\n"
@@ -78,7 +71,6 @@ async def get_user_topic(context, user):
             disable_web_page_preview=True
         )
         
-        # Save both mappings
         data["user_to_topic"][uid] = thread_id
         data["topic_to_user"][str(thread_id)] = user.id
         save_data(data)
@@ -88,7 +80,6 @@ async def get_user_topic(context, user):
         print(f"Topic error: {e}")
         return None
 
-# ==================== HANDLERS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 <b>Welcome to Support Center!</b>\n\n"
@@ -102,26 +93,16 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
     
-    # Ignore admin group messages
     if msg.chat_id == ADMIN_GROUP_ID:
         return
     
     topic_id = await get_user_topic(context, user)
     time_str = datetime.now().strftime("%H:%M")
-    
-    # Build user display with username
-    if user.username:
-        user_display = f"👤 @{user.username}"
-    else:
-        user_display = f"👤 {escape(user.first_name)}"
+    name_display = escape(user.first_name)
     
     try:
         if msg.text:
-            text = (
-                f"⏰ <b>{time_str}</b> | {user_display} | 🆔 <code>{user.id}</code>\n"
-                f"{'━'*25}\n"
-                f"{escape(msg.text)}"
-            )
+            text = f"⏰ <b>{time_str}</b> | <b>{name_display}</b>\n{'━'*20}\n{escape(msg.text)}"
             if topic_id:
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
@@ -132,9 +113,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
         else:
-            # Media / sticker / doc / voice etc.
-            header_text = f"⏰ <b>{time_str}</b> | {user_display} | 🆔 <code>{user.id}</code>"
-            
+            header_text = f"⏰ <b>{time_str}</b> | <b>{name_display}</b>"
             if topic_id:
                 header = await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
@@ -158,14 +137,17 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_to_message_id=header.message_id
                 )
         
-        await msg.reply_text("✅ <b>Message delivered!</b> Please wait for response.", parse_mode="HTML")
+        # ✅ 1 SECOND MEIN AUTO-DELETE
+        confirm = await msg.reply_text("✅ <b>Message delivered!</b>", parse_mode="HTML")
+        await asyncio.sleep(1)
+        try:
+            await confirm.delete()
+        except:
+            pass
         
     except Exception as e:
         print(f"Forward error: {e}")
-        await msg.reply_text(
-            f"❌ <b>Failed to send message.</b>\nError: <code>{escape(str(e))}</code>",
-            parse_mode="HTML"
-        )
+        await msg.reply_text("❌ <b>Failed to send message.</b>", parse_mode="HTML")
 
 async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -175,32 +157,27 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user_id = None
     
-    # Method 1: From replied message
-    if msg.reply_to_message:
+    # Primary: topic thread mapping
+    if msg.message_thread_id:
+        data = load_data()
+        user_id = data.get("topic_to_user", {}).get(str(msg.message_thread_id))
+    
+    # Fallback: reply parsing
+    if not user_id and msg.reply_to_message:
         replied = msg.reply_to_message
         user_id = extract_user_id(replied.text) or extract_user_id(replied.caption)
         if not user_id and replied.reply_to_message:
             user_id = extract_user_id(replied.reply_to_message.text) or extract_user_id(replied.reply_to_message.caption)
     
-    # Method 2: From topic thread_id (works even without replying!)
-    if not user_id and msg.message_thread_id:
-        data = load_data()
-        user_id = data.get("topic_to_user", {}).get(str(msg.message_thread_id))
-    
     if not user_id:
-        await msg.reply_text(
-            "❌ <b>Could not find user.</b>\nReply to a user message or send inside a user topic.",
-            parse_mode="HTML"
-        )
         return
     
     try:
-        # Send admin message to user (text, sticker, photo, doc — anything)
         await msg.copy(chat_id=user_id)
         
-        # Send confirmation and auto-delete after 10 sec
+        # ✅ 1 SECOND MEIN AUTO-DELETE
         confirm = await msg.reply_text("✅ <b>Sent!</b>", parse_mode="HTML")
-        await asyncio.sleep(10)
+        await asyncio.sleep(1)
         try:
             await confirm.delete()
         except:
@@ -209,7 +186,6 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
 
-# ==================== BUILD ====================
 def build_app():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -217,7 +193,6 @@ def build_app():
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user))
     return application
 
-# ==================== FLASK ====================
 @app.route("/", methods=["GET"])
 def home():
     return "✅ SUPPORT BOT ONLINE"
