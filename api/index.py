@@ -10,10 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8892866207:AAFWJv_F7SjP1rWkM_oTCfKf9YOL3YAC1XI"
-
-# YEH BADALNA HAI: Apne admin group ka ID daalna
-# Nikalne ka tarika: @getidsbot ko group mein add karo, /id likho
-ADMIN_GROUP_ID = 8615389785
+ADMIN_GROUP_ID = -1008615389785
 
 TOPIC_MAP_FILE = "/tmp/topic_map.json"
 app = Flask(__name__)
@@ -35,7 +32,6 @@ def save_map(data):
 
 # ==================== HELPERS ====================
 def extract_user_id(text):
-    """Extract user ID from message text/caption."""
     if not text:
         return None
     m = re.search(r'🆔\s*ID:\s*(\d+)', text)
@@ -47,14 +43,12 @@ def extract_user_id(text):
     return None
 
 async def get_user_topic(context, user):
-    """Get or create forum topic for a user."""
     mapping = load_map()
     uid = str(user.id)
     
     if uid in mapping:
         return int(mapping[uid])
     
-    # Create new topic
     name = f"👤 {user.first_name[:15]} | ID:{user.id}"
     try:
         topic = await context.bot.create_forum_topic(
@@ -63,7 +57,6 @@ async def get_user_topic(context, user):
         )
         thread_id = topic.message_thread_id
         
-        # Permanent header in topic
         header = (
             f"┌─ <b>👤 USER INFO</b>\n"
             f"├ <b>Name:</b> {escape(user.first_name)}\n"
@@ -99,11 +92,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Forward user messages to admin topic."""
     user = update.effective_user
     msg = update.message
     
-    # Ignore messages from admin group itself
     if msg.chat_id == ADMIN_GROUP_ID:
         return
     
@@ -126,7 +117,6 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
     else:
-        # Media, sticker, etc.
         header_text = f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>"
         
         if topic_id:
@@ -152,38 +142,31 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_to_message_id=header.message_id
             )
     
-    # Confirm to user
     await msg.reply_text("✅ <b>Message delivered!</b> Please wait for response.", parse_mode="HTML")
 
 async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle admin replies in the group."""
     chat_id = update.effective_chat.id
     if chat_id != ADMIN_GROUP_ID:
         return
     
     msg = update.message
-    
-    # Admin must reply to a message
     if not msg.reply_to_message:
         return
     
     replied = msg.reply_to_message
     user_id = None
     
-    # Check replied message itself
     user_id = extract_user_id(replied.text) or extract_user_id(replied.caption)
     
-    # Check if replied message is a reply to header (for stickers/media)
     if not user_id and replied.reply_to_message:
         user_id = extract_user_id(replied.reply_to_message.text) or extract_user_id(replied.reply_to_message.caption)
     
     if not user_id:
-        return  # Not a user message, ignore silently
+        return
     
-    # Send to user (supports sticker, photo, video, doc, voice, text — everything)
     try:
         await msg.copy(chat_id=user_id)
-        await msg.reply_text(f"✅ <b>Sent to user</b> <code>{user_id}</code>", parse_mode="HTML")
+        await msg.reply_text(f"✅ <b>Sent to user</b> <code>{user.id}</code>", parse_mode="HTML")
     except Exception as e:
         await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
 
@@ -191,9 +174,7 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_app():
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
-    # Admin group messages first
     application.add_handler(MessageHandler(filters.Chat(chat_id=ADMIN_GROUP_ID), handle_admin))
-    # User messages
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_user))
     return application
 
