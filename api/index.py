@@ -13,7 +13,7 @@ BOT_TOKEN = "8892866207:AAFWJv_F7SjP1rWkM_oTCfKf9YOL3YAC1XI"
 
 # YEH BADALNA HAI: Apne admin group ka ID daalna
 # Nikalne ka tarika: @getidsbot ko group mein add karo, /id likho
-ADMIN_GROUP_ID = https://t.me/+sd5xVtUYLGBjNjE1
+ADMIN_GROUP_ID = 8615389785
 
 TOPIC_MAP_FILE = "/tmp/topic_map.json"
 app = Flask(__name__)
