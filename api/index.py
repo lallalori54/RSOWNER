@@ -10,48 +10,50 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ==================== CONFIG ====================
 BOT_TOKEN = "8892866207:AAFWJv_F7SjP1rWkM_oTCfKf9YOL3YAC1XI"
-
-# FIXED: Topic link https://t.me/c/4356447626/3 se group ID -1004356447626
 ADMIN_GROUP_ID = -1004356447626
-
 TOPIC_MAP_FILE = "/tmp/topic_map.json"
 app = Flask(__name__)
 
 # ==================== STORAGE ====================
-def load_map():
+def load_data():
     try:
         with open(TOPIC_MAP_FILE, 'r') as f:
             return json.load(f)
     except:
-        return {}
+        return {"user_to_topic": {}, "topic_to_user": {}}
 
-def save_map(data):
+def save_data(data):
     try:
         with open(TOPIC_MAP_FILE, 'w') as f:
             json.dump(data, f)
     except Exception as e:
         print(f"Save error: {e}")
 
-# ==================== HELPERS ====================
 def extract_user_id(text):
     if not text:
         return None
-    m = re.search(r'🆔\s*ID:\s*(\d+)', text)
+    # Match: 🆔 12345 or 🆔 ID: 12345 or 🆔 <code>12345</code>
+    m = re.search(r'🆔\s*(?:ID\s*:)?\s*(?:<code>)?(\d+)', text)
     if m:
         return int(m.group(1))
+    # Fallback
     m = re.search(r'\(ID:\s*(\d+)\)', text)
     if m:
         return int(m.group(1))
     return None
 
+# ==================== TOPIC MANAGEMENT ====================
 async def get_user_topic(context, user):
-    mapping = load_map()
+    data = load_data()
     uid = str(user.id)
     
-    if uid in mapping:
-        return int(mapping[uid])
+    if uid in data["user_to_topic"]:
+        return int(data["user_to_topic"][uid])
     
-    name = f"👤 {user.first_name[:20]} | ID:{user.id}"
+    # Create topic name with username
+    display = f"@{user.username}" if user.username else user.first_name
+    name = f"👤 {display[:25]} | ID:{user.id}"
+    
     try:
         topic = await context.bot.create_forum_topic(
             chat_id=ADMIN_GROUP_ID,
@@ -59,6 +61,7 @@ async def get_user_topic(context, user):
         )
         thread_id = topic.message_thread_id
         
+        # Send user info header
         header = (
             f"┌─ <b>👤 USER INFO</b>\n"
             f"├ <b>Name:</b> {escape(user.first_name)}\n"
@@ -75,12 +78,14 @@ async def get_user_topic(context, user):
             disable_web_page_preview=True
         )
         
-        mapping[uid] = thread_id
-        save_map(mapping)
+        # Save both mappings
+        data["user_to_topic"][uid] = thread_id
+        data["topic_to_user"][str(thread_id)] = user.id
+        save_data(data)
         return thread_id
         
     except Exception as e:
-        print(f"Topic creation error: {e}")
+        print(f"Topic error: {e}")
         return None
 
 # ==================== HANDLERS ====================
@@ -97,17 +102,23 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg = update.message
     
-    # Ignore messages from admin group itself
+    # Ignore admin group messages
     if msg.chat_id == ADMIN_GROUP_ID:
         return
     
     topic_id = await get_user_topic(context, user)
     time_str = datetime.now().strftime("%H:%M")
     
+    # Build user display with username
+    if user.username:
+        user_display = f"👤 @{user.username}"
+    else:
+        user_display = f"👤 {escape(user.first_name)}"
+    
     try:
         if msg.text:
             text = (
-                f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>\n"
+                f"⏰ <b>{time_str}</b> | {user_display} | 🆔 <code>{user.id}</code>\n"
                 f"{'━'*25}\n"
                 f"{escape(msg.text)}"
             )
@@ -121,8 +132,8 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
         else:
-            # Media, sticker, etc.
-            header_text = f"⏰ <b>{time_str}</b> | 🆔 <code>{user.id}</code>"
+            # Media / sticker / doc / voice etc.
+            header_text = f"⏰ <b>{time_str}</b> | {user_display} | 🆔 <code>{user.id}</code>"
             
             if topic_id:
                 header = await context.bot.send_message(
@@ -152,8 +163,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Forward error: {e}")
         await msg.reply_text(
-            f"❌ <b>Failed to send message.</b>\nError: <code>{escape(str(e))}</code>\n\n"
-            f"Please contact admin directly.",
+            f"❌ <b>Failed to send message.</b>\nError: <code>{escape(str(e))}</code>",
             parse_mode="HTML"
         )
 
@@ -163,23 +173,39 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     msg = update.message
-    if not msg.reply_to_message:
-        return
-    
-    replied = msg.reply_to_message
     user_id = None
     
-    user_id = extract_user_id(replied.text) or extract_user_id(replied.caption)
+    # Method 1: From replied message
+    if msg.reply_to_message:
+        replied = msg.reply_to_message
+        user_id = extract_user_id(replied.text) or extract_user_id(replied.caption)
+        if not user_id and replied.reply_to_message:
+            user_id = extract_user_id(replied.reply_to_message.text) or extract_user_id(replied.reply_to_message.caption)
     
-    if not user_id and replied.reply_to_message:
-        user_id = extract_user_id(replied.reply_to_message.text) or extract_user_id(replied.reply_to_message.caption)
+    # Method 2: From topic thread_id (works even without replying!)
+    if not user_id and msg.message_thread_id:
+        data = load_data()
+        user_id = data.get("topic_to_user", {}).get(str(msg.message_thread_id))
     
     if not user_id:
+        await msg.reply_text(
+            "❌ <b>Could not find user.</b>\nReply to a user message or send inside a user topic.",
+            parse_mode="HTML"
+        )
         return
     
     try:
+        # Send admin message to user (text, sticker, photo, doc — anything)
         await msg.copy(chat_id=user_id)
-        await msg.reply_text(f"✅ <b>Sent to user</b> <code>{user_id}</code>", parse_mode="HTML")
+        
+        # Send confirmation and auto-delete after 10 sec
+        confirm = await msg.reply_text("✅ <b>Sent!</b>", parse_mode="HTML")
+        await asyncio.sleep(10)
+        try:
+            await confirm.delete()
+        except:
+            pass
+            
     except Exception as e:
         await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
 
