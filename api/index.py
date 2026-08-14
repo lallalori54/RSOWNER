@@ -30,10 +30,16 @@ def save_data(data):
 def extract_user_id(text):
     if not text:
         return None
-    m = re.search(r'🆔\s*(?:ID\s*:)?\s*(?:<code>)?(\d+)', text)
+    m = re.search(r'🆔\s*UID\s*:\s*(\d+)', text)
     if m:
         return int(m.group(1))
-    m = re.search(r'\(ID:\s*(\d+)\)', text)
+    m = re.search(r'🆔\s*(\d{6,})', text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'ID\s*:\s*(\d{6,})', text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'<code>(\d{6,})</code>', text)
     if m:
         return int(m.group(1))
     return None
@@ -59,7 +65,7 @@ async def get_user_topic(context, user):
             f"┌─ <b>👤 USER INFO</b>\n"
             f"├ <b>Name:</b> {escape(user.first_name)}\n"
             f"├ <b>Username:</b> @{escape(user.username or 'N/A')}\n"
-            f"├ 🆔 <b>ID:</b> <code>{user.id}</code>\n"
+            f"├ 🆔 <b>UID:</b> <code>{user.id}</code>\n"
             f"├ 🔗 <a href='tg://user?id={user.id}'>Open Profile</a>\n"
             f"└─{'━'*30}"
         )
@@ -100,9 +106,17 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     time_str = datetime.now().strftime("%H:%M")
     name_display = escape(user.first_name)
     
+    # UID line - REQUIRED for admin reply to work when mapping is lost
+    uid_line = f"🆔 UID: {user.id}"
+    
     try:
         if msg.text:
-            text = f"⏰ <b>{time_str}</b> | <b>{name_display}</b>\n{'━'*20}\n{escape(msg.text)}"
+            text = (
+                f"⏰ <b>{time_str}</b> | <b>{name_display}</b>\n"
+                f"{uid_line}\n"
+                f"{'━'*20}\n"
+                f"{escape(msg.text)}"
+            )
             if topic_id:
                 await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
@@ -113,7 +127,10 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=text, parse_mode="HTML")
         else:
-            header_text = f"⏰ <b>{time_str}</b> | <b>{name_display}</b>"
+            header_text = (
+                f"⏰ <b>{time_str}</b> | <b>{name_display}</b>\n"
+                f"{uid_line}"
+            )
             if topic_id:
                 header = await context.bot.send_message(
                     chat_id=ADMIN_GROUP_ID,
@@ -137,7 +154,7 @@ async def handle_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_to_message_id=header.message_id
                 )
         
-        # ✅ 1 SECOND MEIN AUTO-DELETE
+        # 1 second auto-delete
         confirm = await msg.reply_text("✅ <b>Message delivered!</b>", parse_mode="HTML")
         await asyncio.sleep(1)
         try:
@@ -157,25 +174,43 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user_id = None
     
-    # Primary: topic thread mapping
+    # Method 1: Topic mapping (works for fresh messages if /tmp still exists)
     if msg.message_thread_id:
         data = load_data()
         user_id = data.get("topic_to_user", {}).get(str(msg.message_thread_id))
     
-    # Fallback: reply parsing
+    # Method 2: Reply to user message (ALWAYS works because UID is in every msg)
     if not user_id and msg.reply_to_message:
         replied = msg.reply_to_message
         user_id = extract_user_id(replied.text) or extract_user_id(replied.caption)
+        # Check the header message (for media posts)
         if not user_id and replied.reply_to_message:
             user_id = extract_user_id(replied.reply_to_message.text) or extract_user_id(replied.reply_to_message.caption)
     
+    # Method 3: Walk up reply chain
+    if not user_id and msg.reply_to_message:
+        current = msg.reply_to_message
+        depth = 0
+        while current and depth < 5:
+            user_id = extract_user_id(current.text) or extract_user_id(current.caption)
+            if user_id:
+                break
+            current = current.reply_to_message
+            depth += 1
+    
     if not user_id:
+        await msg.reply_text(
+            "❌ <b>User not found!</b>\n\n"
+            "• <b>Reply</b> to any user message (100% works)\n"
+            "• Or user hasn't messaged yet",
+            parse_mode="HTML"
+        )
         return
     
     try:
         await msg.copy(chat_id=user_id)
         
-        # ✅ 1 SECOND MEIN AUTO-DELETE
+        # 1 second auto-delete
         confirm = await msg.reply_text("✅ <b>Sent!</b>", parse_mode="HTML")
         await asyncio.sleep(1)
         try:
@@ -184,7 +219,13 @@ async def handle_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
             
     except Exception as e:
-        await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
+        err = str(e).lower()
+        if "blocked" in err:
+            await msg.reply_text("❌ <b>User blocked the bot.</b>", parse_mode="HTML")
+        elif "not found" in err or "chat not found" in err:
+            await msg.reply_text("❌ <b>User deleted the chat.</b>", parse_mode="HTML")
+        else:
+            await msg.reply_text(f"❌ <b>Failed:</b> {escape(str(e))}", parse_mode="HTML")
 
 def build_app():
     application = Application.builder().token(BOT_TOKEN).build()
